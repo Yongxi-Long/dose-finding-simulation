@@ -1,0 +1,454 @@
+---
+title: "Main simulation for dose-finding methods"
+author: "Yongxi Long"
+toc: true
+format: pdf
+editor: visual
+---
+
+## Aim
+
+Assess the impact of the choice of dose-finding method in phase 1 on later phase success.
+
+```{r,warning=FALSE,message=FALSE}
+source("data_generating_functions.R")
+source("simulate_phases_functions.R")
+source("combine_results.R")
+```
+
+
+## Phase 1
+
+```{r,echo=FALSE}
+load("results/phase1/res_N50.RData")
+```
+
+
+In phase 1 simulation, the first thing the user has to determine is
+
+1.  The data generation pattern
+
+-   The user can supply his/her own simulated data set (the data_list parameter takes in a list of data frames for each iteration)
+-   The user can make use of the internally data generation function by supplying
+    -   The number of iterations nsim,
+    -   The sample size N
+    -   The DLT rates for each dose (Or the whole functional curve and corresponding dose levels)
+
+Then the user has to specify which dose-finding method to use
+
+2.  The dose-finding method
+
+-   The dose-finding method is specified by the design parameter, available choices are "threep3" (3+3), "CRM" (Continuous Reassessment Method), "mTPI" (modified toxicity probability interval), "BOIN" (Bayesian optimal interval). Users can also supply new dose-finding methods by adding a new R script. Note the script name should match the function name and the design parameter value.
+
+-   Parameters that are specific for the dose-finding method. For example, if design="BOIN", then the user should further supply target DLT rate (target_DLT), cohort size for escalation (csize) etc.
+
+### Illustration of using simulate_ph1()
+
+Below is an example of using internal data generation. We use a simple logistic curve to describe the relationship between DLT rate and dose level.
+
+```{r,echo=TRUE,eval=FALSE}
+res_ph1 <- simulate_ph1(
+             nsim=1e3, # number of iterations
+             N=50, # sample size
+             tox_profile = tox_S_shape, # name of the tox-dose function
+             dose_levels = c(100,200,300,400), # dose levels to investigate
+             # or, can directly give a vector of DLT rates instead of giving
+             # tox_profile and dose_levels
+             # DLT_rates = c(0.02,0.07,0.15,0.30),
+             design = "mTPI", # dose-finding method
+             # below are design parameters specific for mTPI method
+                     target_DLT = 0.3, # target DLT rate
+                     csize=3, # cohort size for dose escalation
+                     prior=c(1,1), # prior for the beta-binomial model
+                     eps1=0.05,eps2=0.05, # (target_DLT - eps1, target_DLT+eps2) 
+                                          # is the indifference interval
+                     tox_bound=0.95, # doses with estimated DLT rate higher than this
+                                     # will be considered as too toxic and eliminated
+             seed = 86 # random seed for data generation
+             )
+```
+
+```{r}
+res_ph1
+```
+
+The returned results give:
+
+-   Trial phase, sample size, number of iterations, dose-finding method used
+-   A summary table that gives the proportion that each dose is selected as the MTD, if the dose-finding function returns other values besides the MTD, the summary table present the average of these values in separate columns. For example the 3rd column gives the average DLT rate or each dose over the 1,000 iterations. *Dose = 0* means that the first dose is estimated to be too toxic, therefore the trial is terminated and no MTD is recommended.
+
+### The Imatinib toxicity profile
+
+A more efficient workflow is to generate only once the data for simulation, and then evaluate the data by different dose-finding methods. We use the DLT rates from four doses of Imatinib (400mg,600mg,800mg,1000mg) as an example.
+
+The structure of the data should follow:
+
+-   It is a list of length nsim, where nsim is the number of iterations for the simulation. The k-th element of the list is a data frame that will be used for the k-th iteration
+-   The data frame should have N rows and ndose columns, where N is the sample size and ndose is the number of doses under investigation. The i-th row and the j-th column gives the DLT outcome (1 for yes 0 for no) of the i-th patient under the j-th dose.
+
+```{r}
+# the DLT rates
+DLT_rates <- c(0.205,0.216,0.27,0.625)
+# generate data externally
+set.seed(123)
+data_ph1_imatinib <- gen_DLT(nsim=1e3,
+                     DLT_rates = DLT_rates,
+                     N = 50)
+head(data_ph1_imatinib[[1]],3)
+```
+
+#### 3+3 design
+
+```{r,echo=TRUE,eval=FALSE}
+# user input data
+res_ph1_threep3 <- simulate_ph1(data_list = data_ph1_imatinib,
+                        design = "threep3")
+```
+```{r}
+res_ph1_threep3$`summary table`
+```
+
+
+#### BOIN design
+
+```{r,echo=TRUE,eval=FALSE}
+# use internal data generation
+res_ph1_BOIN <- simulate_ph1(data_list = data_ph1_imatinib,
+                    design = "BOIN",
+                    target_DLT=0.3,
+                    p_L = 0.6*0.3,
+                    p_U = 1.4*0.3,
+                    tox_bound=0.95)
+```
+```{r}
+res_ph1_BOIN$`summary table`
+```
+
+#### mTPI design
+
+```{r,echo=TRUE,eval=FALSE}
+res_ph1_mTPI <- simulate_ph1(data_list = data_ph1_imatinib,
+                    design = "mTPI",
+                    target_DLT=0.3,
+                    eps1 = 0.05, eps2 = 0.05,
+                    tox_bound=0.95)
+```
+```{r}
+res_ph1_mTPI$`summary table`
+```
+
+#### CRM design
+
+```{r,echo=TRUE,eval=FALSE}
+res_ph1_CRM <- simulate_ph1(data_list = data_ph1_imatinib,
+                    design = "CRM",
+                    target_DLT=0.3,
+                    csize=1,
+                    conf_level=0.95,
+                    model = "empiric")
+```
+```{r}
+res_ph1_CRM$`summary table`
+```
+
+I have not yet implemented overdose control on CRM so CRM always recommends a dose as MTD.
+
+```{r,echo=FALSE,eval=FALSE}
+save(res_ph1,res_ph1_threep3,
+     res_ph1_mTPI,res_ph1_BOIN,res_ph1_CRM,file = "results/phase1/res_N50.RData")
+```
+
+
+## Phase 2
+
+```{r,echo=FALSE}
+load("results/phase2/res.RData")
+```
+
+
+Like Phase 1, user can choose between supplying data directly or using internally built data generation function to get the phase 2 data for simulation.
+
+For phase 2, the user first need to decide on the trial design, the program offers two design: the single-arm trial design and the simon's two-stage design (design = "single_arm"/"simon2stage"). By default the function will calculate design parameters internally (such as sample size). If the users wish to supply their own design parameters, they can use the design_para to take in a named list of design parameters. The function will check if the supplied list contains all design parameters needed by the design type.
+
+### Illustration of using simulate_ph2()
+
+```{r,echo=TRUE,eval=FALSE}
+res_ph2 <- simulate_ph2(
+           nsim = 1e3, # number of iterations
+           rsp_profile = rsp_S_shape, # name of the efficacy-dose function
+           dose_levels = c(100,200,300,400), # dose levels to investigate
+           # or, can directly give a vector of response rates instead of giving
+           # rsp_profile and dose_levels
+           # rsp_rates = c(0.04,0.13,0.27,0.40),
+           design = "simon2stage", # trial design
+           # below are design parameters specific for simon2stage design
+                        p0=0.3, # response rate assumed for the control
+                        p1=0.4, # response rate assumed for the treatment
+                        alpha = 0.05, # type I error rate
+                        beta=0.2, # type II error rate
+                        nmax=200, # maximum sample size for solving
+           # design parameter
+           seed = 86 # random seed for data generation
+           )
+```
+
+
+```{r}
+res_ph2
+```
+
+
+The returned results give:
+
+-   Trial phase, sample size, number of iterations, trial design used
+-   A summary table that gives the phase 2 power under each dose (avg_reject_H0), if the design function returns other values besides rejection of H0, the summary table present the average of these values in separate columns. For example the 3rd column gives the average response rate or each dose over the 1,000 iterations.
+
+### The Imatinib efficacy profile
+
+We again use the Imatinib dose-effiacy profile to simulate phase 2 results. We first generate the data needed then evaluate it under different phase 2 designs.
+
+Similar to phase 1 data structure, The structure of the phase 2 data should follow:
+
+-   It is a list of length nsim, where nsim is the number of iterations for the simulation. The k-th element of the list is a data frame that will be used for the k-th iteration
+-   The data frame should have N rows and ndose columns, where N is the sample size and ndose is the number of doses under investigation. The i-th row and the j-th column gives the response outcome (1 for yes 0 for no) of the i-th patient under the j-th dose.
+
+```{r}
+# the response rate for four doses 400mg, 600mg, 800mg, 1000mg
+rsp_rates <- c(0.493,0.581,0.652,0.6)
+# generate data externally
+set.seed(123)
+data_ph2_imatinib <- gen_rsp(
+                     nsim=1e3,
+                     rsp_rates = rsp_rates,
+                     N= 200)
+head(data_ph2_imatinib[[1]],3)
+```
+
+#### Simon's two stage design
+
+```{r,echo=TRUE,eval=FALSE}
+res_ph2_simon2stage <- simulate_ph2(data_list = data_ph2_imatinib,
+                        design = "simon2stage",
+                        p0=0.5,
+                        p1=0.6,
+                        alpha = 0.05,
+                        beta=0.2,
+                        nmax=200)
+```
+
+```{r}
+res_ph2_simon2stage$`sample size`
+res_ph2_simon2stage$`summary table`
+```
+
+We see a warning. This is because our supplied data set has more observations than the actual calculated sample size by the specified Simon's two stage design. So the simulation will run under the calculated sample size, which is N=155. In practice it is recommended to supply larger data set so different designs can "chop" a smaller data set they actually need to perform the evaluation.
+
+
+#### Single-arm design
+
+```{r,echo=TRUE,eval=FALSE}
+res_ph2_single_arm <- simulate_ph2(data_list = data_ph2_imatinib,
+                        design = "single_arm",
+                        p0=0.5,
+                        p1=0.6,
+                        alpha = 0.05,
+                        beta=0.2)
+res_ph2_single_arm$`sample size`
+res_ph2_single_arm$`summary table`
+```
+
+We can see that the Simon's two stage design gives smaller expected sample size while retaining almost the same power as the single-arm design.
+
+```{r,echo=FALSE,eval=FALSE}
+save(res_ph2,res_ph2_simon2stage,res_ph2_single_arm,
+     file = "results/phase2/res.RData")
+```
+
+## Combine phase 1,2 results
+
+We can combine different designs of phase 1 with different designs of phase 2 to get an overall power for phase 1 till phase 2.
+
+\begin{align*}
+P(\text{ph2 success}) & = \sum_{j=1}^{J}P(\text{ph2 success}\mid \text{dose}_j) \\
+& \cdot P(\text{dose}_j\text{ recommended from ph1})
+\end{align*}
+
+```{r}
+# for 3+3 design in phase 1 and Simon's twostage design in phase 2
+combine_results(res_ph1 = res_ph1_threep3,
+                res_ph2 = res_ph2_simon2stage)
+```
+
+
+```{r}
+# for CRM design in phase 1 and Simon's twostage design in phase 2
+combine_results(res_ph1 = res_ph1_CRM,
+                res_ph2 = res_ph2_simon2stage)
+```
+
+
+```{r}
+# for mTPI design in phase 1 and Simon's twostage design in phase 2
+combine_results(res_ph1 = res_ph1_mTPI,
+                res_ph2 = res_ph2_simon2stage)
+```
+
+
+```{r}
+# for mTPI design in phase 1 and Single arm one-stage design in phase 2
+combine_results(res_ph1 = res_ph1_mTPI,
+                res_ph2 = res_ph2_single_arm)
+```
+
+
+## Phase 3
+
+### Illustration of using simulate_ph3()
+
+The simulate_ph3() function relies on the gen_surv() function to simulate survival data for each dose. The user can choose to generate survival data in either a simple exponential model or more complex models. 
+
+1.  Supply the median survival for the control arm (a single value, median_surv0) and for the treatment arm (median_surv1, a vector for different doses). Then the randomization probability to the treatment arm (p_trt) and maximum follow-up time (maxt). Then the gen_surv() function will use a exponential distribution for the survival with hazards derived from the median survivals.
+
+2.  More flexible and complex survival data generation using the simsurv package by setting the use_simsurv=TRUE. Note we are generating survival data for multiple doses, so the supplied parameter for simsurv() should be a list with each element giving the parameter for each dose.
+
+```{r,echo=TRUE}
+# example of using median survival
+data_list1 <- gen_surv(nsim=10,
+                 N=300,
+                 median_surv0 = 20,
+                 median_surv1 = c(20,22,28,30),
+                 p_trt = 0.5,
+                 use_simsurv = FALSE,
+                 maxt=60)
+# see the data structure
+head(data_list1[[1]][[1]],3)
+```
+
+Different from phase 1&2 patient data where the patient outcome under a single dose can be stored by a single value (0/1), the outcome of a phase 3 patient under a single dose is stored in a vector (time-to-event, event indicator, treatment assignment status). So the data structure in phase 3 is a two-level list of data frames:
+
+-   data_list[[1]] gives a list of data frames for the 1st iteration. It is of length J where J is the number of dose levels. 
+-   data_list[[1]][[1]] gives the data frame for the 1st dose for the 1st iteration and has the following columns:
+    -   id: patient id
+    -   trt: treatment assignment
+    -   eventtime: time to event
+    -   status: event indicator
+
+```{r,echo=TRUE,eval=FALSE}
+# example of using simsurv
+data_list2 <- gen_surv(nsim=10,
+                 N=300,
+                 p_trt = 0.5,
+                 use_simsurv = TRUE,
+                 ndose = 4,
+                 maxt=60,
+                 dist = "exponential",
+                 lambdas = 0.035,
+                 betas = list(c(trt = log(1)),
+                             c(trt=log(0.91)),
+                             c(trt=log(0.71)),
+                             c(trt = log(0.67))))
+```
+
+A more recommended way if the user wants to simulate more complex survival distribution other than the default exponential survival from gen_surv() is to simulate externally and then arrange data into a desirable format.
+
+```{r,eval=FALSE,echo=TRUE}
+# example of simulating time-varying effect
+# say the treatment is only effective after 3 months
+# the log hazard ratios for the treatment arm under different doses after 3 months
+beta_trt <- function(t)
+    {
+      ifelse(t < 3, 0, 1)
+    }
+log_hrs <- c(log(1),log(0.91),log(0.71),log(0.67))
+# generate the survival data for each dose separately and store them in a list, then repeat for the number of iterations
+data_list3 <- replicate(n=10,
+                        expr = 
+                          {
+data_alldoses <- sapply(log_hrs, function(log_hr)
+  {
+  covariates <- data.frame(id = 1:300, trt = rbinom(300,1,0.5))
+  sim_data <- simsurv::simsurv(dist = "weibull",
+                   lambdas = 0.1,gammas = 0.8,
+                   betas = c(trt = 0),
+                   x = covariates,
+                   tde = c(trt = log_hr),
+                   tdefunction = beta_trt,
+                   maxt = 60
+                   )
+  sim_data <- merge(sim_data,covariates,by="id")
+  return(sim_data)
+},simplify = FALSE)
+},simplify = FALSE)
+```
+
+### The Imatinib survival profile
+
+```{r,echo=FALSE}
+load("results/phase3/res.RData")
+```
+
+
+Similar to phase 1&2 simulation, we can either supply externally simulated data for evaluation (by the data_list parameter) or use the internal data generation function.
+
+We use the survival profiles derived from Imatinib and a randomized controlled trial design for phase 3 simulation.
+
+```{r,echo=TRUE,eval=FALSE}
+# median survival for standard of care, unit in months
+median_surv0 <- 20
+# median survival for four doses of Imatinib
+median_surv1 <- c(20,22,28,30)
+# generate survival data
+data_ph3_imatinib <- gen_surv(nsim = 1e3,
+                              N = 300,
+                              median_surv0 = median_surv0,
+                              median_surv1 = median_surv1,
+                              p_trt = 0.5, # 1:1 randomization
+                              maxt = 60 # maximum follow-up time
+                              )
+```
+
+
+```{r,echo=TRUE,eval=FALSE}
+res_ph3_RCT <- simulate_ph3(
+                    data_list = data_ph3_imatinib,
+                    design = "RCT",
+                    design_para = list(N=300,alpha=0.05) 
+                    # specifies the sample size
+                    # and significance level for log rank test
+                    )
+```
+```{r}
+res_ph3_RCT$`summary table`
+```
+
+
+```{r,echo=FALSE,eval=FALSE}
+save(data_ph3_imatinib,
+     res_ph3_RCT,
+     file = "results/phase3/res.RData")
+```
+
+
+## Combine results from Phase 1,2,3 simulations
+
+Overall success through phase 1 to phase 3 can be calculated as
+
+\begin{align*}
+P(\text{ph3 success}) & = \sum_{j=1}^{J}P(\text{ph3 success}\mid \text{dose}_j) \\
+& \cdot P(\text{ph2 success}\mid \text{dose}_j) \\
+& \cdot P(\text{dose}_j\text{ recommended from ph1})
+\end{align*}
+
+```{r}
+combine_results(res_ph1 = res_ph1_threep3,
+                res_ph2 = res_ph2_simon2stage,
+                res_ph3 = res_ph3_RCT)
+```
+
+
+```{r}
+combine_results(res_ph1 = res_ph1_BOIN,
+                res_ph2 = res_ph2_simon2stage,
+                res_ph3 = res_ph3_RCT)
+```
+
